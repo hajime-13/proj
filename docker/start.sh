@@ -3,50 +3,67 @@ set -e
 
 cd /var/www/app
 
-# -------------------------------------------------------
-# Inject Railway environment variables into .env
-# Railway passes DB_*, APP_*, etc. as real env vars.
-# We write them into .env so Laravel's config system
-# picks them up correctly (especially after config:cache).
-# -------------------------------------------------------
-inject_env() {
-    KEY="$1"
-    VALUE="$2"
-    if [ -n "$VALUE" ]; then
-        # Replace existing key or append
-        if grep -q "^${KEY}=" .env 2>/dev/null; then
-            sed -i "s|^${KEY}=.*|${KEY}=${VALUE}|" .env
-        else
-            echo "${KEY}=${VALUE}" >> .env
-        fi
-    fi
-}
+# ------------------------------------------------------------------
+# Railway MySQL service exposes: MYSQLHOST, MYSQLPORT, MYSQLUSER,
+# MYSQLPASSWORD, MYSQLDATABASE.
+# If the user set DB_HOST etc. via reference vars those take priority.
+# Fall back to the native MYSQL* vars if DB_* are missing/localhost.
+# ------------------------------------------------------------------
+RESOLVED_DB_HOST="${DB_HOST:-${MYSQLHOST:-127.0.0.1}}"
+RESOLVED_DB_PORT="${DB_PORT:-${MYSQLPORT:-3306}}"
+RESOLVED_DB_DATABASE="${DB_DATABASE:-${MYSQLDATABASE:-railway}}"
+RESOLVED_DB_USERNAME="${DB_USERNAME:-${MYSQLUSER:-root}}"
+RESOLVED_DB_PASSWORD="${DB_PASSWORD:-${MYSQLPASSWORD:-}}"
 
-inject_env APP_KEY         "$APP_KEY"
-inject_env APP_ENV         "$APP_ENV"
-inject_env APP_DEBUG       "$APP_DEBUG"
-inject_env APP_URL         "$APP_URL"
-inject_env DB_CONNECTION   "$DB_CONNECTION"
-inject_env DB_HOST         "$DB_HOST"
-inject_env DB_PORT         "$DB_PORT"
-inject_env DB_DATABASE     "$DB_DATABASE"
-inject_env DB_USERNAME     "$DB_USERNAME"
-inject_env DB_PASSWORD     "$DB_PASSWORD"
-inject_env SESSION_DRIVER  "$SESSION_DRIVER"
-inject_env CACHE_STORE     "$CACHE_STORE"
-inject_env QUEUE_CONNECTION "$QUEUE_CONNECTION"
-inject_env FILESYSTEM_DISK "$FILESYSTEM_DISK"
+# Write a fresh .env with all resolved values
+cat > .env <<EOF
+APP_NAME="${APP_NAME:-OrderList}"
+APP_ENV="${APP_ENV:-production}"
+APP_KEY="${APP_KEY:-}"
+APP_DEBUG="${APP_DEBUG:-false}"
+APP_URL="${APP_URL:-http://localhost}"
 
-# Generate app key if still missing
-php artisan key:generate --force
+LOG_CHANNEL=stack
+LOG_STACK=single
+LOG_LEVEL=${LOG_LEVEL:-error}
 
-# Clear any stale caches from build time
-php artisan config:clear  || true
-php artisan route:clear   || true
-php artisan view:clear    || true
+DB_CONNECTION="${DB_CONNECTION:-mysql}"
+DB_HOST="${RESOLVED_DB_HOST}"
+DB_PORT="${RESOLVED_DB_PORT}"
+DB_DATABASE="${RESOLVED_DB_DATABASE}"
+DB_USERNAME="${RESOLVED_DB_USERNAME}"
+DB_PASSWORD="${RESOLVED_DB_PASSWORD}"
 
-# Run migrations (will fail gracefully if DB not ready yet)
-php artisan migrate --force || echo "WARNING: migrate failed, DB may not be ready"
+SESSION_DRIVER="${SESSION_DRIVER:-file}"
+SESSION_LIFETIME=120
+SESSION_ENCRYPT=false
+SESSION_PATH=/
+SESSION_DOMAIN=null
+
+BROADCAST_CONNECTION=log
+FILESYSTEM_DISK="${FILESYSTEM_DISK:-local}"
+QUEUE_CONNECTION="${QUEUE_CONNECTION:-sync}"
+CACHE_STORE="${CACHE_STORE:-file}"
+
+MAIL_MAILER=log
+MAIL_FROM_ADDRESS="hello@example.com"
+MAIL_FROM_NAME="OrderList"
+EOF
+
+echo "DB config: host=${RESOLVED_DB_HOST} port=${RESOLVED_DB_PORT} db=${RESOLVED_DB_DATABASE} user=${RESOLVED_DB_USERNAME}"
+
+# Generate app key if not provided
+if [ -z "$APP_KEY" ]; then
+    php artisan key:generate --force
+fi
+
+# Clear stale caches
+php artisan config:clear || true
+php artisan route:clear  || true
+php artisan view:clear   || true
+
+# Run migrations
+php artisan migrate --force
 
 # Create storage symlink
 php artisan storage:link || true
