@@ -1,36 +1,47 @@
 #!/bin/sh
-set -e
 
 cd /var/www/app
 
 # ------------------------------------------------------------------
-# Resolve DB credentials — Railway MySQL exposes MYSQLHOST etc.
+# DEBUG: show injected vars
 # ------------------------------------------------------------------
-RESOLVED_DB_HOST="${DB_HOST:-${MYSQLHOST:-127.0.0.1}}"
-RESOLVED_DB_PORT="${DB_PORT:-${MYSQLPORT:-3306}}"
-RESOLVED_DB_DATABASE="${DB_DATABASE:-${MYSQLDATABASE:-railway}}"
-RESOLVED_DB_USERNAME="${DB_USERNAME:-${MYSQLUSER:-root}}"
-RESOLVED_DB_PASSWORD="${DB_PASSWORD:-${MYSQLPASSWORD:-}}"
+echo "=== ENV CHECK ==="
+echo "DB_HOST=[${DB_HOST}]"
+echo "DB_PORT=[${DB_PORT}]"
+echo "DB_DATABASE=[${DB_DATABASE}]"
+echo "DB_USERNAME=[${DB_USERNAME}]"
+echo "APP_URL=[${APP_URL}]"
+echo "APP_KEY=[${APP_KEY:0:20}...]"
+echo "================="
 
-echo "DB: host=${RESOLVED_DB_HOST} port=${RESOLVED_DB_PORT} db=${RESOLVED_DB_DATABASE}"
+# ------------------------------------------------------------------
+# Sanitize APP_URL — must be a valid http/https URL
+# ------------------------------------------------------------------
+_APP_URL="${APP_URL}"
+case "$_APP_URL" in
+    http://*|https://*) ;;  # valid
+    *) _APP_URL="http://localhost" ;;  # fallback if malformed
+esac
 
-# Write fresh .env
-cat > /var/www/app/.env <<EOF
-APP_NAME="${APP_NAME:-OrderList}"
-APP_ENV="${APP_ENV:-production}"
-APP_KEY="${APP_KEY:-}"
-APP_DEBUG="${APP_DEBUG:-false}"
-APP_URL="${APP_URL:-http://localhost}"
+# ------------------------------------------------------------------
+# Build .env
+# ------------------------------------------------------------------
+cat > /var/www/app/.env << ENVEOF
+APP_NAME=OrderList
+APP_ENV=production
+APP_KEY=${APP_KEY}
+APP_DEBUG=false
+APP_URL=${_APP_URL}
 
 LOG_CHANNEL=stderr
-LOG_LEVEL=${LOG_LEVEL:-error}
+LOG_LEVEL=error
 
 DB_CONNECTION=mysql
-DB_HOST=${RESOLVED_DB_HOST}
-DB_PORT=${RESOLVED_DB_PORT}
-DB_DATABASE=${RESOLVED_DB_DATABASE}
-DB_USERNAME=${RESOLVED_DB_USERNAME}
-DB_PASSWORD=${RESOLVED_DB_PASSWORD}
+DB_HOST=${DB_HOST:-127.0.0.1}
+DB_PORT=${DB_PORT:-3306}
+DB_DATABASE=${DB_DATABASE:-railway}
+DB_USERNAME=${DB_USERNAME:-root}
+DB_PASSWORD=${DB_PASSWORD}
 
 SESSION_DRIVER=file
 SESSION_LIFETIME=120
@@ -46,47 +57,38 @@ CACHE_STORE=file
 MAIL_MAILER=log
 MAIL_FROM_ADDRESS=hello@example.com
 MAIL_FROM_NAME=OrderList
-EOF
+ENVEOF
 
-# Fix ownership so www-data can read .env
 chown www-data:www-data /var/www/app/.env
 
-# Generate app key if not set
+echo "Written .env — DB_HOST=$(grep DB_HOST /var/www/app/.env)"
+
+# Generate key if missing
 if [ -z "$APP_KEY" ]; then
     php artisan key:generate --force
 fi
 
-# Clear stale build-time caches
+# Clear caches (do NOT re-cache — read .env directly at runtime)
 php artisan config:clear || true
 php artisan route:clear  || true
 php artisan view:clear   || true
+php artisan cache:clear  || true
 
-# Run migrations
-php artisan migrate --force
+# Run migrations — don't crash the container if this fails
+php artisan migrate --force || echo "WARNING: migrate failed"
 
 # Storage symlink
 php artisan storage:link || true
 
-# Re-cache with correct runtime values
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
-
-# ------------------------------------------------------------------
-# Start PHP-FPM in foreground as background process, then wait
-# for port 9000 to be ready before starting Nginx
-# ------------------------------------------------------------------
+# Start PHP-FPM in background
 php-fpm --nodaemonize &
-PHP_FPM_PID=$!
 
-echo "Waiting for PHP-FPM on port 9000..."
+# Wait for PHP-FPM on port 9000
+echo "Waiting for PHP-FPM..."
 for i in $(seq 1 30); do
-    if nc -z 127.0.0.1 9000 2>/dev/null; then
-        echo "PHP-FPM is ready."
-        break
-    fi
+    nc -z 127.0.0.1 9000 2>/dev/null && echo "PHP-FPM ready." && break
     sleep 1
 done
 
-# Start Nginx in foreground (keeps container alive)
+# Start Nginx in foreground
 exec nginx -g 'daemon off;'
