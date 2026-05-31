@@ -1,94 +1,63 @@
-#!/bin/sh
+# syntax=docker/dockerfile:1
 
-cd /var/www/app
+FROM php:8.2-fpm-alpine
 
-# ------------------------------------------------------------------
-# DEBUG: show injected vars
-# ------------------------------------------------------------------
-echo "=== ENV CHECK ==="
-echo "DB_HOST=[${DB_HOST}]"
-echo "DB_PORT=[${DB_PORT}]"
-echo "DB_DATABASE=[${DB_DATABASE}]"
-echo "DB_USERNAME=[${DB_USERNAME}]"
-echo "APP_URL=[${APP_URL}]"
-echo "APP_KEY=[${APP_KEY:0:20}...]"
-echo "================="
+# Install system deps + supervisord
+RUN apk add --no-cache \
+    nginx \
+    bash \
+    netcat-openbsd \
+    supervisor \
+    icu-dev \
+    oniguruma-dev \
+    libzip-dev \
+    libpng-dev \
+    libjpeg-turbo-dev \
+    freetype-dev \
+    sqlite-dev \
+    zip unzip \
+    git \
+    nodejs npm \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install intl pdo pdo_mysql pdo_sqlite mbstring zip opcache gd \
+    && docker-php-ext-enable opcache
 
-# ------------------------------------------------------------------
-# Sanitize APP_URL — must be a valid http/https URL
-# ------------------------------------------------------------------
-_APP_URL="${APP_URL}"
-case "$_APP_URL" in
-    http://*|https://*) ;;  # valid
-    *) _APP_URL="http://localhost" ;;  # fallback if malformed
-esac
+WORKDIR /var/www/app
 
-# ------------------------------------------------------------------
-# Build .env
-# ------------------------------------------------------------------
-cat > /var/www/app/.env << ENVEOF
-APP_NAME=OrderList
-APP_ENV=production
-APP_KEY=${APP_KEY}
-APP_DEBUG=false
-APP_URL=${_APP_URL}
+# Copy configs
+COPY ./docker/nginx.conf      /etc/nginx/nginx.conf
+COPY ./docker/php-fpm.conf    /etc/php-fpm-railway.conf
+COPY ./docker/supervisord.conf /etc/supervisord.conf
 
-LOG_CHANNEL=stderr
-LOG_LEVEL=error
+# Copy app
+COPY . /var/www/app
 
-DB_CONNECTION=mysql
-DB_HOST=${DB_HOST:-127.0.0.1}
-DB_PORT=${DB_PORT:-3306}
-DB_DATABASE=${DB_DATABASE:-railway}
-DB_USERNAME=${DB_USERNAME:-root}
-DB_PASSWORD=${DB_PASSWORD}
+# Bootstrap .env for build-time artisan commands
+RUN cp .env.example .env
 
-SESSION_DRIVER=file
-SESSION_LIFETIME=120
-SESSION_ENCRYPT=false
-SESSION_PATH=/
-SESSION_DOMAIN=null
+# Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
 
-BROADCAST_CONNECTION=log
-FILESYSTEM_DISK=local
-QUEUE_CONNECTION=sync
-CACHE_STORE=file
+# Generate placeholder key
+RUN php artisan key:generate --force
 
-MAIL_MAILER=log
-MAIL_FROM_ADDRESS=hello@example.com
-MAIL_FROM_NAME=OrderList
-ENVEOF
+# Build assets
+RUN npm install --no-fund --no-audit && npm run build
 
-chown www-data:www-data /var/www/app/.env
+# Permissions
+RUN mkdir -p storage/app/public \
+             storage/framework/cache \
+             storage/framework/sessions \
+             storage/framework/views \
+             storage/logs \
+             bootstrap/cache \
+    && chown -R www-data:www-data storage bootstrap/cache .env
 
-echo "Written .env — DB_HOST=$(grep DB_HOST /var/www/app/.env)"
+# Startup script
+COPY ./docker/start.sh /start.sh
+RUN chmod +x /start.sh
 
-# Generate key if missing
-if [ -z "$APP_KEY" ]; then
-    php artisan key:generate --force
-fi
+EXPOSE 80
 
-# Clear caches (do NOT re-cache — read .env directly at runtime)
-php artisan config:clear || true
-php artisan route:clear  || true
-php artisan view:clear   || true
-php artisan cache:clear  || true
-
-# Run migrations — don't crash the container if this fails
-php artisan migrate --force || echo "WARNING: migrate failed"
-
-# Storage symlink
-php artisan storage:link || true
-
-# Start PHP-FPM in background
-php-fpm --nodaemonize &
-
-# Wait for PHP-FPM on port 9000
-echo "Waiting for PHP-FPM..."
-for i in $(seq 1 30); do
-    nc -z 127.0.0.1 9000 2>/dev/null && echo "PHP-FPM ready." && break
-    sleep 1
-done
-
-# Start Nginx in foreground
-exec nginx -g 'daemon off;'
+CMD ["/start.sh"]
