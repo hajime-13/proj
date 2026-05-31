@@ -6,6 +6,7 @@ FROM php:8.2-fpm-alpine
 RUN apk add --no-cache \
     nginx \
     bash \
+    netcat-openbsd \
     icu-dev \
     oniguruma-dev \
     libzip-dev \
@@ -54,6 +55,17 @@ RUN mkdir -p /var/www/app/storage/app/public \
              /var/www/app/bootstrap/cache \
     && chown -R www-data:www-data /var/www/app/storage /var/www/app/bootstrap/cache \
     && chown www-data:www-data /var/www/app/.env
+
+# Override PHP-FPM pool to listen on TCP 9000 and run as www-data
+RUN echo '[www]' > /usr/local/etc/php-fpm.d/zz-railway.conf \
+ && echo 'listen = 127.0.0.1:9000' >> /usr/local/etc/php-fpm.d/zz-railway.conf \
+ && echo 'user = www-data' >> /usr/local/etc/php-fpm.d/zz-railway.conf \
+ && echo 'group = www-data' >> /usr/local/etc/php-fpm.d/zz-railway.conf \
+ && echo 'pm = dynamic' >> /usr/local/etc/php-fpm.d/zz-railway.conf \
+ && echo 'pm.max_children = 10' >> /usr/local/etc/php-fpm.d/zz-railway.conf \
+ && echo 'pm.start_servers = 2' >> /usr/local/etc/php-fpm.d/zz-railway.conf \
+ && echo 'pm.min_spare_servers = 1' >> /usr/local/etc/php-fpm.d/zz-railway.conf \
+ && echo 'pm.max_spare_servers = 3' >> /usr/local/etc/php-fpm.d/zz-railway.conf
 
 # Copy startup script
 COPY ./docker/start.sh /start.sh
