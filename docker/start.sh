@@ -45,8 +45,8 @@ php artisan config:clear  || true
 php artisan route:clear   || true
 php artisan view:clear    || true
 
-# Run migrations
-php artisan migrate --force
+# Run migrations (will fail gracefully if DB not ready yet)
+php artisan migrate --force || echo "WARNING: migrate failed, DB may not be ready"
 
 # Create storage symlink
 php artisan storage:link || true
