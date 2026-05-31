@@ -3,17 +3,23 @@ set -e
 
 cd /var/www/app
 
+# DEBUG: print all env vars so we can see what Railway is actually injecting
+echo "=== ENVIRONMENT VARIABLES ==="
+env | grep -E "^(MYSQL|DB_|APP_|RAILWAY)" | sort
+echo "=============================="
+
 # ------------------------------------------------------------------
 # Railway MySQL service exposes: MYSQLHOST, MYSQLPORT, MYSQLUSER,
 # MYSQLPASSWORD, MYSQLDATABASE.
-# If the user set DB_HOST etc. via reference vars those take priority.
-# Fall back to the native MYSQL* vars if DB_* are missing/localhost.
+# Also check RAILWAY_* private networking variables.
 # ------------------------------------------------------------------
 RESOLVED_DB_HOST="${DB_HOST:-${MYSQLHOST:-127.0.0.1}}"
 RESOLVED_DB_PORT="${DB_PORT:-${MYSQLPORT:-3306}}"
 RESOLVED_DB_DATABASE="${DB_DATABASE:-${MYSQLDATABASE:-railway}}"
 RESOLVED_DB_USERNAME="${DB_USERNAME:-${MYSQLUSER:-root}}"
 RESOLVED_DB_PASSWORD="${DB_PASSWORD:-${MYSQLPASSWORD:-}}"
+
+echo "Resolved DB: host=${RESOLVED_DB_HOST} port=${RESOLVED_DB_PORT} db=${RESOLVED_DB_DATABASE} user=${RESOLVED_DB_USERNAME}"
 
 # Write a fresh .env with all resolved values
 cat > .env <<EOF
@@ -49,8 +55,6 @@ MAIL_MAILER=log
 MAIL_FROM_ADDRESS="hello@example.com"
 MAIL_FROM_NAME="OrderList"
 EOF
-
-echo "DB config: host=${RESOLVED_DB_HOST} port=${RESOLVED_DB_PORT} db=${RESOLVED_DB_DATABASE} user=${RESOLVED_DB_USERNAME}"
 
 # Generate app key if not provided
 if [ -z "$APP_KEY" ]; then
