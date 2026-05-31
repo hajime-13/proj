@@ -2,7 +2,7 @@
 
 FROM php:8.2-fpm-alpine
 
-# Install system deps + SQLite dev (needed for pdo_sqlite build)
+# Install system deps
 RUN apk add --no-cache \
     nginx \
     bash \
@@ -30,11 +30,17 @@ COPY ./docker/nginx.conf /etc/nginx/nginx.conf
 # Copy app code
 COPY . /var/www/app
 
+# Create .env from example so artisan commands work at build & runtime
+RUN cp .env.example .env
+
 # Install Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 # Install PHP deps (prod, no dev)
 RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+
+# Generate a placeholder key (will be overwritten at runtime by start.sh)
+RUN php artisan key:generate --force
 
 # Build front-end assets
 RUN npm install --no-fund --no-audit && npm run build
@@ -46,7 +52,8 @@ RUN mkdir -p /var/www/app/storage/app/public \
              /var/www/app/storage/framework/views \
              /var/www/app/storage/logs \
              /var/www/app/bootstrap/cache \
-    && chown -R www-data:www-data /var/www/app/storage /var/www/app/bootstrap/cache
+    && chown -R www-data:www-data /var/www/app/storage /var/www/app/bootstrap/cache \
+    && chown www-data:www-data /var/www/app/.env
 
 # Copy startup script
 COPY ./docker/start.sh /start.sh
